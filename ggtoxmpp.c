@@ -20,6 +20,34 @@ pthread_t gg_ping_tid, xmpp_loop_tid;
 xmpp_ctx_t *ctx;
 const char *xmpp_target;
 int running = 1;
+gg_pubdir50_t query;
+
+struct buddy {
+    int number;
+    char *name;
+} buddy_list[128];
+int buddy_size = 0;
+
+void buddy_add(int number, char *name) {
+    struct buddy *b = &buddy_list[buddy_size++];
+    b->number = number;
+    b->name = name;
+}
+
+char *buddy_name(int number) {
+    for(int i = 0; i < buddy_size; i++) {
+        if(buddy_list[i].number == number) {
+            return buddy_list[i].name;
+        }
+    }
+
+    query = gg_pubdir50_new(GG_PUBDIR50_SEARCH_REQUEST);
+    char *sender_string = malloc(10);
+    sprintf(sender_string, "%i", event->event.msg.sender);
+    gg_pubdir50_add(query, GG_PUBDIR50_UIN, sender_string);
+    gg_pubdir50(session, query);
+    return NULL;
+}
 
 void quit() {
     printf("\nStopping ggtoxmpp...");
@@ -45,8 +73,8 @@ void *xmpp_loop(void *arg) {
     xmpp_run(ctx);
 }
 
-void xmpp_send_simple_message(xmpp_conn_t *conn, const char* const to,
-                              const char* const message) {
+void xmpp_send_simple_message(xmpp_conn_t *conn, const char const * to,
+                              const char const *message) {
    xmpp_stanza_t *msg, *body, *text;
    xmpp_ctx_t *ctx = xmpp_conn_get_context(conn);
 
@@ -67,9 +95,9 @@ void xmpp_send_simple_message(xmpp_conn_t *conn, const char* const to,
    xmpp_stanza_release(msg);
 }
 
-void conn_handler(xmpp_conn_t * const conn, const xmpp_conn_event_t status,
-                  const int error, xmpp_stream_error_t * const stream_error,
-                  void * const userdata) {
+void conn_handler(xmpp_conn_t *const conn, const xmpp_conn_event_t status,
+                  const int error, xmpp_stream_error_t *const stream_error,
+                  void *const userdata) {
     xmpp_ctx_t *ctx = (xmpp_ctx_t *)userdata;
     int secured;
 
@@ -131,7 +159,7 @@ int main(void) {
     //libgadu init
     memset(&params, 0, sizeof(params));
     params.uin = gg_id;
-    params.password = (char*) gg_pass;
+    params.password = (char *) gg_pass;
     params.async = 0;
     params.status = GG_STATUS_INVISIBLE;
     params.encoding = GG_ENCODING_UTF8;
@@ -150,11 +178,46 @@ int main(void) {
         if(event->type == GG_EVENT_MSG) {
             msg = (event->event).msg;
             strftime(time_string, 16, "%d-%m-%y %H:%M", gmtime(&msg.time));
-            printf("%s: %i\n", time_string, msg.sender);
-            sprintf(reply_text, "%s: %i\n%s", time_string, msg.sender,
-                    msg.message);
+            char *sender_name_optional = buddy_name(msg.sender);
+            char *sender_name;
+
+            if(sender_name_optional == NULL) {
+                sender_name = "";
+            }
+            else {
+                sender_name = malloc(strlen(sender_name_optional) + 4);
+                sprintf(sender_name, " (%s)", sender_name_optional);
+            }
+
+            printf("%s: %i%s\n", time_string, msg.sender, sender_name);
+            sprintf(reply_text, "%s: %i%s\n%s", time_string, msg.sender,
+                    sender_name, msg.message);
             xmpp_send_simple_message(conn, xmpp_target, reply_text);
             gg_send_message(session, GG_CLASS_MSG, msg.sender, gg_reply);
+        }
+        else if(event->type == GG_EVENT_PUBDIR50_SEARCH_REPLY) {
+            gg_pubdir50_t result = event->event.pubdir50;
+
+            /* buddy_add(atoi(gg_pubdir50_get(result, 0, GG_PUBDIR50_UIN)), */
+            /* buddy_add(, */
+            const char *name = gg_pubdir50_get(result, 0, GG_PUBDIR50_NICKNAME);
+            /* printf("%s", gg_pubdir50_get(result, 0, GG_PUBDIR50_FAMILYNAME)); */
+
+            if(name == NULL) {
+                name = malloc(64);
+                sprintf((char *) name, "%s",
+                        gg_pubdir50_get(result, 0, GG_PUBDIR50_FIRSTNAME));
+
+                const char *last_name = gg_pubdir50_get(result, 0,
+                                                        GG_PUBDIR50_LASTNAME);
+                if(last_name != NULL) {
+                    sprintf((char *) name, "%s %s", name, last_name);
+                }
+            }
+
+            buddy_add(atoi(gg_pubdir50_get(result, 0, GG_PUBDIR50_UIN)),
+                      (char *) name);
+            gg_pubdir50_free(query);
         }
 
         gg_event_free(event);
